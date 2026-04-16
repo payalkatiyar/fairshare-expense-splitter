@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { getUserGroupBalance } from './expense-utils';
 
 /**
  * Find user by email or username
@@ -110,41 +111,38 @@ export async function addRoomMember(roomId: string, userId: string) {
 }
 
 /**
- * Check if user can leave group (no pending debts)
+ * Check if user can leave group (no pending debts/balances)
  */
 export async function canLeaveGroup(
   groupId: string,
   userId: string
 ): Promise<{ canLeave: boolean; message?: string; balances?: { owes: number; getsBack: number } }> {
-  // Get all unsettled settlements for this user in this group
-  const { data: settlements, error } = await supabase
+  // 1. Check for unsettled formal settlements
+  const { data: unsettledSettlements, error: settleError } = await supabase
     .from('settlements')
     .select('*')
     .eq('group_id', groupId)
     .eq('is_settled', false)
     .or(`from_user_id.eq.${userId},to_user_id.eq.${userId}`);
 
-  if (error) throw error;
+  if (settleError) throw settleError;
 
-  const balances = {
-    owes: 0,
-    getsBack: 0,
-  };
-
-  settlements?.forEach((settlement) => {
-    if (settlement.from_user_id === userId) {
-      balances.owes += settlement.amount;
-    }
-    if (settlement.to_user_id === userId) {
-      balances.getsBack += settlement.amount;
-    }
-  });
-
-  if (balances.owes > 0 || balances.getsBack > 0) {
+  if (unsettledSettlements && unsettledSettlements.length > 0) {
     return {
       canLeave: false,
-      message: `You have pending balances: You owe Rs. ${balances.owes.toFixed(2)} and are owed Rs. ${balances.getsBack.toFixed(2)}`,
-      balances,
+      message: 'You have pending settlements that need to be cleared.',
+    };
+  }
+
+  // 2. Check fundamental net balance using centralized function (factors in confirmed payments)
+  const balanceData = await getUserGroupBalance(groupId, userId);
+  const netBalance = balanceData.balance;
+
+  if (Math.abs(netBalance) > 0.01) {
+    return {
+      canLeave: false,
+      message: `You have an active balance of Rs. ${netBalance.toFixed(2)}. Settle all expenses before leaving.`,
+      balances: { owes: netBalance < 0 ? Math.abs(netBalance) : 0, getsBack: netBalance > 0 ? netBalance : 0 }
     };
   }
 
@@ -206,35 +204,15 @@ export async function canDeleteGroup(
     return { canDelete: true };
   }
 
-  const balances: Record<string, number> = {};
-  memberIds.forEach((id) => {
-    balances[id] = 0;
-  });
-
-  const { data: expenses, error: expenseError } = await supabase
-    .from('expenses')
-    .select('id, paid_by, amount')
-    .eq('group_id', groupId);
-  if (expenseError) throw expenseError;
-
-  (expenses || []).forEach((expense) => {
-    balances[expense.paid_by] = (balances[expense.paid_by] || 0) + Number(expense.amount || 0);
-  });
-
-  const expenseIds = (expenses || []).map((e) => e.id);
-  if (expenseIds.length > 0) {
-    const { data: splits, error: splitError } = await supabase
-      .from('expense_splits')
-      .select('user_id, amount')
-      .in('expense_id', expenseIds);
-    if (splitError) throw splitError;
-
-    (splits || []).forEach((split) => {
-      balances[split.user_id] = (balances[split.user_id] || 0) - Number(split.amount || 0);
-    });
+  let hasOutstandingBalance = false;
+  for (const id of memberIds) {
+    const bal = await getUserGroupBalance(groupId, id);
+    if (Math.abs(bal.balance) > 0.01) {
+      hasOutstandingBalance = true;
+      break;
+    }
   }
 
-  const hasOutstandingBalance = Object.values(balances).some((value) => Math.abs(value) > 0.01);
   if (hasOutstandingBalance) {
     return {
       canDelete: false,

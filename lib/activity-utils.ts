@@ -2,9 +2,12 @@ import { supabase } from './supabase';
 
 export type ActivityType =
   | 'expense_added'
-  | 'member_added'
   | 'payment_recorded'
+  | 'payment_marked_paid'
+  | 'payment_confirmed'
+  | 'member_added'
   | 'member_left'
+  | 'member_joined'
   | 'group_created'
   | 'group_deleted';
 
@@ -106,6 +109,10 @@ export function formatActivityMessage(activity: any): string {
       return `${activity.metadata?.memberName} joined${group ? ` ${group}` : ''}`;
     case 'payment_recorded':
       return `${user} paid Rs. ${activity.metadata?.amount}${group ? ` in ${group}` : ''}`;
+    case 'payment_marked_paid':
+      return `${user} marked payment of Rs. ${activity.metadata?.amount} as paid`;
+    case 'payment_confirmed':
+      return `${user} confirmed receiving Rs. ${activity.metadata?.amount}`;
     case 'member_left':
       return `${user} left${group ? ` ${group}` : ''}`;
     case 'group_created':

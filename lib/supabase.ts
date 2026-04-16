@@ -65,6 +65,7 @@ export type Settlement = {
   to_user_id: string;
   amount: number;
   is_settled: boolean;
+  status: 'pending' | 'paid' | 'confirmed';
   settled_at: string | null;
   created_at: string;
 };

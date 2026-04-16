@@ -2,13 +2,14 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useApp } from '@/lib/app-context';
-import { getUserTotalBalance } from '@/lib/expense-utils';
+import { getUserTotalBalance, getUserGroupBalance } from '@/lib/expense-utils';
 import { supabase, Group, User } from '@/lib/supabase';
 import { getUserProfile } from '@/lib/auth-utils';
+import { parseError, logError } from '@/lib/error-handler';
 import { ChevronRight, Building2, Plus } from 'lucide-react';
 
 export function DashboardScreen() {
-  const { currentUser, setScreen, setSelectedGroupId, userRole, refreshUserProfile } = useApp();
+  const { currentUser, setScreen, setSelectedGroupId, userRole } = useApp();
   const [userProfile, setUserProfile] = useState<User | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [organisations, setOrganisations] = useState<any[]>([]);
@@ -22,35 +23,6 @@ export function DashboardScreen() {
   const [monthlySpent, setMonthlySpent] = useState(0);
   const [monthlyBudget, setMonthlyBudget] = useState(15000);
   const [loading, setLoading] = useState(true);
-
-  const getUserGroupBalance = useCallback(async (groupId: string, userId: string) => {
-    const { data: expenses } = await supabase
-      .from('expenses')
-      .select('id, amount, paid_by')
-      .eq('group_id', groupId);
-
-    const { data: splits } = await supabase
-      .from('expense_splits')
-      .select('user_id, amount')
-      .in('expense_id', expenses?.map((e) => e.id) || []);
-
-    let paid = 0;
-    let owes = 0;
-
-    expenses?.forEach((expense) => {
-      if (expense.paid_by === userId) {
-        paid += expense.amount;
-      }
-    });
-
-    splits?.forEach((split) => {
-      if (split.user_id === userId) {
-        owes += split.amount;
-      }
-    });
-
-    return { paid, owes, balance: paid - owes };
-  }, []);
 
   const loadData = useCallback(async () => {
     if (!currentUser?.id) return;
@@ -68,24 +40,34 @@ export function DashboardScreen() {
           .select('group_id')
           .eq('user_id', currentUser.id);
 
-        if (memberData) {
-          const { data: groupsData } = await supabase
+        if (memberData && memberData.length > 0) {
+          const { data: groupsData, error: groupsError } = await supabase
             .from('groups')
             .select('*')
             .in('id', memberData.map((m) => m.group_id));
+
+          if (groupsError) throw groupsError;
 
           setGroups(groupsData || []);
 
           // Load balances for each group
           const balancesMap: Record<string, { balance: number; color: string }> = {};
           for (const group of groupsData || []) {
-            const balance = await getUserGroupBalance(group.id, currentUser.id);
-            balancesMap[group.id] = {
-              balance: balance.balance,
-              color: balance.balance < 0 ? 'text-destructive' : 'text-success',
-            };
+            try {
+              const balance = await getUserGroupBalance(group.id, currentUser.id);
+              balancesMap[group.id] = {
+                balance: balance.balance,
+                color: balance.balance < 0 ? 'text-destructive' : 'text-success',
+              };
+            } catch (err) {
+              console.error(`Error loading balance for group ${group.id}:`, err);
+              balancesMap[group.id] = { balance: 0, color: 'text-muted-foreground' };
+            }
           }
           setGroupBalances(balancesMap);
+        } else {
+          setGroups([]);
+          setGroupBalances({});
         }
 
         // Load total balances
@@ -115,12 +97,13 @@ export function DashboardScreen() {
 
         setOrganisations(orgs || []);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('[v0] Error loading dashboard data:', error);
+      logError(parseError(error), 'DashboardScreen.loadData');
     } finally {
       setLoading(false);
     }
-  }, [currentUser?.id, userRole, getUserGroupBalance]);
+  }, [currentUser?.id, userRole]);
 
   useEffect(() => {
     loadData();
@@ -170,24 +153,31 @@ export function DashboardScreen() {
             <div className="mx-6 mb-6">
               <div className="bg-card rounded-xl p-6 shadow-sm border border-border">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-muted-foreground text-sm font-semibold">MONTHLY BUDGET</h3>
-                  <span className="text-sm font-bold text-foreground">
-                    {((monthlySpent / monthlyBudget) * 100).toFixed(0)}%
+                  <h3 className="text-muted-foreground text-xs font-bold uppercase tracking-wider">MONTHLY SPLURGE TRACK</h3>
+                  <span className={`text-sm font-bold ${monthlySpent > monthlyBudget ? 'text-destructive' : 'text-primary'}`}>
+                    {((monthlySpent / monthlyBudget) * 100).toFixed(0)}% splurged
                   </span>
                 </div>
-                <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
+                <div className="w-full h-3 bg-secondary rounded-full overflow-hidden shadow-inner">
                   <div
-                    className={`h-full ${
-                      monthlySpent > monthlyBudget ? 'bg-destructive' : 'bg-success'
+                    className={`h-full transition-all duration-500 ease-out ${
+                      monthlySpent > monthlyBudget
+                        ? 'bg-gradient-to-r from-red-600 to-red-400'
+                        : 'bg-gradient-to-r from-primary to-primary/60'
                     }`}
                     style={{
                       width: `${Math.min((monthlySpent / monthlyBudget) * 100, 100)}%`,
                     }}
                   ></div>
                 </div>
-                <p className="text-muted-foreground text-sm mt-3">
-                  Rs. {monthlySpent.toFixed(0)} of Rs. {monthlyBudget.toFixed(0)} spent
-                </p>
+                <div className="flex justify-between items-center mt-3">
+                  <p className="text-muted-foreground text-sm font-medium">
+                    Rs. <span className="text-foreground font-bold">{monthlySpent.toFixed(0)}</span> <span className="text-xs">spent</span>
+                  </p>
+                  <p className="text-muted-foreground text-sm font-medium">
+                    Limit: Rs. <span className="text-foreground font-bold">{monthlyBudget.toFixed(0)}</span>
+                  </p>
+                </div>
               </div>
             </div>
           )}

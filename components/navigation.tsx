@@ -52,9 +52,9 @@ export function Navigation() {
         </button>
 
         <button
-          onClick={() => setScreen('activity')}
+          onClick={() => setScreen('general-settings')}
           className={`flex-1 flex flex-col items-center justify-center py-4 gap-1 transition ${
-            isActive('profile')
+            isActive('general-settings')
               ? 'text-primary'
               : 'text-muted-foreground hover:text-foreground'
           }`}

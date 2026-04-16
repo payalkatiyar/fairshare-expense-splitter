@@ -154,7 +154,7 @@ export function AddExpenseScreen() {
       // Calculate splits
       let splits: Record<string, number>;
       if (splitType === 'equal') {
-        splits = calculateEqualSplit(expenseAmount, selectedMembers);
+        splits = calculateEqualSplit(expenseAmount, selectedMembers, paidBy);
       } else {
         splits = parsedCustomSplits;
       }
@@ -183,14 +183,21 @@ export function AddExpenseScreen() {
         .select('*')
         .in('expense_id', allExpenses?.map((e) => e.id) || []);
 
+      const { data: existingSettlements } = await supabase
+        .from('settlements')
+        .select('*')
+        .eq('group_id', selectedGroupId)
+        .eq('status', 'confirmed');
+
       const allMemberIds = members.map((m) => m.user_id);
-      const settlements = calculateOptimizedSettlements(
+      const newSettlements = calculateOptimizedSettlements(
         allExpenses || [],
         allSplits || [],
+        existingSettlements || [],
         allMemberIds
       );
 
-      await saveSettlements(selectedGroupId, settlements);
+      await saveSettlements(selectedGroupId, newSettlements);
 
       // Log activity
       await logActivity(
